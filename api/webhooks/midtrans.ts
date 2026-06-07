@@ -1,12 +1,26 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+
 import { createClient } from "@supabase/supabase-js";
 
-import { formatLockUnits } from "../../src/lib/money";
-import { StoreRepository } from "../../src/repositories/store";
-import {
-  MidtransService,
-  parseMidtransNotification,
-} from "../../src/services/midtrans";
-import type { SettlementResult } from "../../src/types";
+interface MidtransNotification {
+  order_id: string;
+  status_code: string;
+  gross_amount: string;
+  signature_key: string;
+  transaction_id: string;
+  transaction_status: string;
+  fraud_status?: string;
+  [key: string]: unknown;
+}
+
+interface SettlementResult {
+  transaction_id: string;
+  discord_id: string;
+  amount_idr: number;
+  credited_locks: number;
+  balance_locks: number;
+  already_credited: boolean;
+}
 
 function required(key: string): string {
   const value = process.env[key]?.trim();
@@ -16,6 +30,74 @@ function required(key: string): string {
 
 function json(payload: unknown, status = 200): Response {
   return Response.json(payload, { status });
+}
+
+function requireString(
+  record: Record<string, unknown>,
+  key: string,
+): string {
+  const value = record[key];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`Payload Midtrans tidak memiliki ${key}`);
+  }
+  return value;
+}
+
+function parseNotification(value: unknown): MidtransNotification {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("Payload Midtrans tidak valid");
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    ...record,
+    order_id: requireString(record, "order_id"),
+    status_code: requireString(record, "status_code"),
+    gross_amount: requireString(record, "gross_amount"),
+    signature_key: requireString(record, "signature_key"),
+    transaction_id: requireString(record, "transaction_id"),
+    transaction_status: requireString(record, "transaction_status"),
+    fraud_status:
+      typeof record.fraud_status === "string"
+        ? record.fraud_status
+        : undefined,
+  };
+}
+
+function verifyNotification(
+  notification: MidtransNotification,
+  serverKey: string,
+): boolean {
+  const expected = createHash("sha512")
+    .update(
+      `${notification.order_id}${notification.status_code}${notification.gross_amount}${serverKey}`,
+      "utf8",
+    )
+    .digest("hex");
+  const left = Buffer.from(expected);
+  const right = Buffer.from(notification.signature_key);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function isSuccessful(notification: MidtransNotification): boolean {
+  const status = notification.transaction_status.toLowerCase();
+  const fraud = notification.fraud_status?.toLowerCase();
+  return (
+    (status === "settlement" || status === "capture") &&
+    (fraud === undefined || fraud === "accept")
+  );
+}
+
+function formatLockUnits(totalLocks: number): string {
+  const normalized = Math.max(0, Math.trunc(totalLocks));
+  const bgl = Math.floor(normalized / 10_000);
+  const afterBgl = normalized % 10_000;
+  const dl = Math.floor(afterBgl / 100);
+  const wl = afterBgl % 100;
+  const parts: string[] = [];
+  if (bgl > 0) parts.push(`${bgl} bgl`);
+  if (dl > 0) parts.push(`${dl} dl`);
+  if (wl > 0) parts.push(`${wl} wl`);
+  return parts.length > 0 ? parts.join(" ") : "0 wl";
 }
 
 async function notifyDiscord(result: SettlementResult): Promise<void> {
@@ -79,15 +161,6 @@ export async function POST(request: Request): Promise<Response> {
         },
       },
     );
-    const store = new StoreRepository(database);
-    const midtrans = new MidtransService({
-      serverKey,
-      enabled: true,
-      production:
-        process.env.MIDTRANS_IS_PRODUCTION?.toLowerCase() === "true",
-      feePercent: 0,
-      expiryMinutes: 10,
-    });
 
     let body: unknown;
     try {
@@ -98,7 +171,7 @@ export async function POST(request: Request): Promise<Response> {
 
     let notification;
     try {
-      notification = parseMidtransNotification(body);
+      notification = parseNotification(body);
     } catch (error) {
       return json(
         {
@@ -110,11 +183,11 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    if (!midtrans.verifyNotification(notification)) {
+    if (!verifyNotification(notification, serverKey)) {
       return json({ ok: false, error: "Signature tidak valid" }, 401);
     }
 
-    if (!midtrans.isSuccessful(notification)) {
+    if (!isSuccessful(notification)) {
       return json({
         ok: true,
         processed: false,
@@ -131,13 +204,17 @@ export async function POST(request: Request): Promise<Response> {
       return json({ ok: false, error: "gross_amount tidak valid" }, 400);
     }
 
-    const result = await store.settleTopup({
-      orderId: notification.order_id,
-      midtransTransactionId: notification.transaction_id,
-      transactionStatus: notification.transaction_status,
-      grossAmountIdr,
-      payload: notification,
+    const { data, error } = await database.rpc("settle_topup", {
+      p_order_id: notification.order_id,
+      p_midtrans_transaction_id: notification.transaction_id,
+      p_transaction_status: notification.transaction_status,
+      p_gross_amount: grossAmountIdr,
+      p_raw_payload: notification,
+      p_force: false,
     });
+    if (error) throw new Error(error.message);
+    const result = (data as SettlementResult[] | null)?.[0];
+    if (!result) throw new Error("Settlement top-up gagal diproses");
 
     if (!result.already_credited) {
       await notifyDiscord(result).catch((error) => {
