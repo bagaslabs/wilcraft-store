@@ -1,4 +1,13 @@
-create or replace function public.settle_topup(
+drop function if exists public.settle_topup(
+  text,
+  text,
+  text,
+  bigint,
+  jsonb,
+  boolean
+);
+
+create function public.settle_topup(
   p_order_id text,
   p_midtrans_transaction_id text,
   p_transaction_status text,
