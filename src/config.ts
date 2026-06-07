@@ -1,4 +1,5 @@
 export interface AppConfig {
+  host: string;
   port: number;
   storeName: string;
   discord: {
@@ -77,6 +78,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
 
   return {
+    host: env.HOST?.trim() || "0.0.0.0",
     port: positiveInteger(env.PORT, 3000, "PORT"),
     storeName: env.STORE_NAME?.trim() || "Over Store",
     discord: {

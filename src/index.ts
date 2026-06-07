@@ -15,12 +15,15 @@ const app = createServer({
   store,
   midtrans,
   notifyPayment: (result) => bot.notifyPayment(result),
-}).listen(config.port);
+}).listen({
+  hostname: config.host,
+  port: config.port,
+});
 
 await bot.start();
 
 console.log(
-  `${config.storeName} API aktif di http://${app.server?.hostname}:${app.server?.port}`,
+  `${config.storeName} API aktif di http://${config.host}:${app.server?.port}`,
 );
 
 async function shutdown(signal: string): Promise<void> {
