@@ -167,6 +167,70 @@ export const shopCommand = new SlashCommandBuilder()
   )
   .addSubcommand((command) =>
     command
+      .setName("remove-balance")
+      .setDescription("Kurangi saldo user")
+      .addUserOption((option) =>
+        option.setName("user").setDescription("Target user").setRequired(true),
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName("bgl")
+          .setDescription("Jumlah Blue Gem Lock")
+          .setMinValue(0)
+          .setRequired(true),
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName("dl")
+          .setDescription("Jumlah Diamond Lock")
+          .setMinValue(0)
+          .setRequired(true),
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName("wl")
+          .setDescription("Jumlah World Lock")
+          .setMinValue(0)
+          .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option.setName("note").setDescription("Catatan tambahan"),
+      ),
+  )
+  .addSubcommand((command) =>
+    command
+      .setName("set-balance")
+      .setDescription("Set saldo user ke nominal tertentu")
+      .addUserOption((option) =>
+        option.setName("user").setDescription("Target user").setRequired(true),
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName("bgl")
+          .setDescription("Saldo Blue Gem Lock")
+          .setMinValue(0)
+          .setRequired(true),
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName("dl")
+          .setDescription("Saldo Diamond Lock")
+          .setMinValue(0)
+          .setRequired(true),
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName("wl")
+          .setDescription("Saldo World Lock")
+          .setMinValue(0)
+          .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option.setName("note").setDescription("Catatan tambahan"),
+      ),
+  )
+  .addSubcommand((command) =>
+    command
       .setName("set-deposit-world")
       .setDescription("Atur informasi world deposit")
       .addStringOption((option) =>

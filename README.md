@@ -29,7 +29,8 @@ Growtopia dinyatakan di luar cakupan v1.
 
 3. Buat aplikasi dan bot di Discord Developer Portal. Aktifkan scope `bot` dan
    `applications.commands`, lalu beri izin View Channels, Send Messages,
-   Embed Links, Attach Files, Read Message History, dan Use Application Commands.
+   Embed Links, Attach Files, Read Message History, Use Application Commands,
+   dan Manage Roles jika ingin role otomatis setelah pembelian.
 
 4. Salin `.env.example` menjadi `.env`, lalu isi semua kredensial dan ID channel.
    `SUPABASE_SERVICE_ROLE_KEY` dan `MIDTRANS_SERVER_KEY` hanya boleh berada di
@@ -37,6 +38,8 @@ Growtopia dinyatakan di luar cakupan v1.
    digunakan.
    Tambahkan juga `BUY_LOG_CHANNEL_ID` dan `DEPOSIT_LOG_CHANNEL_ID` jika kamu
    ingin log pembelian dan deposit dikirim ke channel khusus.
+   Isi `PURCHASE_ROLE_IDS` dengan role ID yang dipisahkan koma jika pembeli
+   perlu diberi role otomatis. Pastikan role bot berada di atas role tersebut.
 
 5. Jalankan:
 
@@ -69,10 +72,11 @@ Semua command berada di bawah `/shop`:
 - `panel`, `refresh`
 - `product-add`, `product-edit`, `product-delete`
 - `stock-add`, `stock-view`
-- `set-rate`, `add-balance`, `set-deposit-world`
+- `set-rate`, `add-balance`, `remove-balance`, `set-balance`, `set-deposit-world`
 - `confirm-payment`
 
-`/shop add-balance` menerima `bgl`, `dl`, dan `wl`.
+`/shop add-balance`, `remove-balance`, dan `set-balance` menerima `bgl`, `dl`,
+dan `wl`.
 
 `stock-add` menerima file teks maksimal 1 MB dengan satu item per baris.
 `product-delete` melakukan soft delete agar riwayat order tetap utuh.

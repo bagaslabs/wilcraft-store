@@ -53,6 +53,9 @@ function errorMessage(error: unknown): string {
     "GrowID belum diatur",
     "Kode produk tidak ditemukan",
     "Saldo tidak mencukupi",
+    "Saldo user tidak mencukupi",
+    "Kurangi minimal",
+    "Saldo tidak boleh negatif",
     "Stok produk tidak mencukupi",
     "Jumlah pembelian harus",
     "duplicate key",
@@ -69,6 +72,28 @@ function isUnknownInteraction(error: unknown): boolean {
     "code" in error &&
     error.code === 10062
   );
+}
+
+function formatEmojiLocks(totalLocks: number): string {
+  const normalized = Math.max(0, Math.trunc(totalLocks));
+  const bgl = Math.floor(normalized / 10_000);
+  const afterBgl = normalized % 10_000;
+  const dl = Math.floor(afterBgl / 100);
+  const wl = afterBgl % 100;
+  const parts: string[] = [];
+
+  if (bgl > 0) parts.push(`${bgl} 🧊`);
+  if (dl > 0) parts.push(`${dl} 🔐`);
+  if (wl > 0) parts.push(`${wl} 🔒`);
+
+  return parts.length > 0 ? parts.join(" ") : "0 🔒";
+}
+
+function getLockAmount(interaction: ChatInputCommandInteraction): number {
+  const bgl = interaction.options.getInteger("bgl", true);
+  const dl = interaction.options.getInteger("dl", true);
+  const wl = interaction.options.getInteger("wl", true);
+  return bgl * 10_000 + dl * 100 + wl;
 }
 
 export class StoreBot {
@@ -180,7 +205,7 @@ export class StoreBot {
             .setTitle("Top-Up Berhasil")
             .setDescription(
               [
-                `Nominal top-up: **${formatIdr(result.amount_idr)}**`,
+                `Jumlah top-up IDR: **${formatIdr(result.amount_idr)}**`,
                 `Saldo masuk: **${formatLockUnits(result.credited_locks)}**`,
                 `Saldo sekarang: **${formatLockUnits(result.balance_locks)}**`,
                 `Transaction ID: \`${result.transaction_id}\``,
@@ -219,43 +244,31 @@ export class StoreBot {
     quantity: number;
     totalPriceLocks: number;
   }): Promise<void> {
-    const [discordUser, account] = await Promise.all([
+    const [discordUser, product] = await Promise.all([
       this.client.users.fetch(input.discordId).catch(() => null),
-      this.store.getUser(input.discordId).catch(() => null),
+      this.store.getProductByCode(input.productCode).catch(() => null),
     ]);
+    const totalPriceIdr =
+      product?.price_idr !== null && product?.price_idr !== undefined
+        ? product.price_idr * input.quantity
+        : null;
 
     const embed = new EmbedBuilder()
-      .setColor(0x2ecc71)
-      .setTitle("NEW PURCHASE SUCCESS!")
-      .setDescription("Seseorang baru saja melakukan pembelian")
-      .addFields(
-        { name: "Order ID", value: `\`${input.orderId}\``, inline: true },
-        {
-          name: "Pembeli",
-          value: discordUser ? `${discordUser} (${discordUser.id})` : input.discordId,
-          inline: true,
-        },
-        {
-          name: "GrowID",
-          value: account?.grow_id ? `\`${account.grow_id}\`` : "Belum diatur",
-          inline: true,
-        },
-        {
-          name: "Produk",
-          value: `${input.productName} (${input.productCode})`,
-          inline: true,
-        },
-        {
-          name: "Jumlah",
-          value: `${input.quantity}`,
-          inline: true,
-        },
-        {
-          name: "Total Harga",
-          value: formatLockUnits(input.totalPriceLocks),
-          inline: true,
-        },
-      );
+      .setColor(0xf58220)
+      .setTitle(`#Order Number: ${input.orderId}`)
+      .setDescription(
+        [
+          `Buyer: ${discordUser ?? `<@${input.discordId}>`}`,
+          `Product: **${input.quantity} ${input.productName.toUpperCase()}**`,
+          `Code: **${input.productCode}**`,
+          `Total Price: **${formatEmojiLocks(input.totalPriceLocks)}${
+            totalPriceIdr !== null ? ` | ${formatIdr(totalPriceIdr)}` : ""
+          }**`,
+          "",
+          "**Thanks For Purchasing Our Product ✅**",
+        ].join("\n"),
+      )
+      .setTimestamp();
 
     await this.sendLogEmbed(this.config.discord.buyLogChannelId, embed);
   }
@@ -272,43 +285,73 @@ export class StoreBot {
       this.store.getUser(input.discordId).catch(() => null),
     ]);
 
+    const growId = account?.grow_id ?? "Belum diatur";
+    const currentBalance = account?.balance_locks ?? input.creditedLocks;
     const embed = new EmbedBuilder()
-      .setColor(0x3498db)
-      .setTitle("NEW DEPOSIT RECEIVED!")
-      .setDescription("Satu deposit baru telah berhasil diproses secara otomatis.")
+      .setColor(0xff5fb7)
+      .setTitle("👑 Donation Logs 👑")
       .addFields(
         {
-          name: "Discord",
-          value: discordUser ? `${discordUser} (${discordUser.id})` : input.discordId,
-          inline: true,
-        },
-        {
           name: "GrowID",
-          value: account?.grow_id ? `\`${account.grow_id}\`` : "Belum diatur",
+          value: `**${growId}**`,
           inline: true,
         },
         {
-          name: "Amount",
-          value: formatLockUnits(input.creditedLocks),
+          name: "Total WL",
+          value: `**${input.creditedLocks.toLocaleString("id-ID")} WL**`,
           inline: true,
         },
         {
-          name: "Rupiah",
-          value: formatIdr(input.amountIdr),
+          name: "Converted",
+          value: `**${formatIdr(input.amountIdr)}**`,
           inline: true,
         },
         {
-          name: "Source",
-          value: input.source,
-          inline: true,
+          name: "Status",
+          value: [
+            `Successfully Adding item to **${growId}**`,
+            `Buyer: ${discordUser ?? `<@${input.discordId}>`}`,
+            `Source: **${input.source}**`,
+            `Added: **${formatIdr(input.amountIdr)}**`,
+            `Current Balance: **${formatLockUnits(currentBalance)}**`,
+            input.note ? `Note: ${input.note}` : null,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          inline: false,
         },
-      );
-
-    if (input.note) {
-      embed.addFields({ name: "Catatan", value: input.note, inline: false });
-    }
+      )
+      .setTimestamp();
 
     await this.sendLogEmbed(this.config.discord.depositLogChannelId, embed);
+  }
+
+  private async grantPurchaseRoles(input: {
+    discordId: string;
+    guildId: string | null;
+  }): Promise<void> {
+    const roleIds = this.config.discord.purchaseRoleIds;
+    if (roleIds.length === 0) return;
+
+    const guildId = input.guildId ?? this.config.discord.guildId;
+    if (!guildId) {
+      console.warn(
+        "PURCHASE_ROLE_IDS diatur, tetapi DISCORD_GUILD_ID tidak tersedia.",
+      );
+      return;
+    }
+
+    const guild = await this.client.guilds.fetch(guildId);
+    const member = await guild.members.fetch(input.discordId);
+    const missingRoleIds = roleIds.filter(
+      (roleId) => !member.roles.cache.has(roleId),
+    );
+    if (missingRoleIds.length === 0) return;
+
+    await member.roles.add(
+      missingRoleIds,
+      "Role otomatis setelah pembelian berhasil",
+    );
   }
 
   async updateLiveStock(): Promise<void> {
@@ -587,7 +630,7 @@ export class StoreBot {
       .setDescription(
         [
           `Order: \`${result.order_id}\``,
-          `Produk: **${result.product_name} [${result.product_code}]**`,
+          `Produk: **${result.product_name}**`,
           `Kode: **${result.product_code}**`,
           `Jumlah: **${result.quantity}**`,
           `Harga satuan: **${formatLockUnits(unitPriceLocks)}**`,
@@ -605,7 +648,8 @@ export class StoreBot {
       .setDescription(
         [
           `Order: \`${result.order_id}\``,
-          `Produk: **${result.product_name} [${result.product_code}]**`,
+          `Produk: **${result.product_name}**`,
+          `Kode: **${result.product_code}**`,
           `Jumlah: **${result.quantity}**`,
           `Total: **${formatLockUnits(result.total_price_locks)}**`,
           `Sisa saldo: **${formatLockUnits(result.balance_locks)}**`,
@@ -632,6 +676,10 @@ export class StoreBot {
       embeds: [dmSent ? replyEmbed : receiptEmbed],
       files: dmSent ? [] : [buildAttachment()],
     });
+    void this.grantPurchaseRoles({
+      discordId: interaction.user.id,
+      guildId: interaction.guildId,
+    }).catch((error) => console.error("Gagal memberikan role pembeli:", error));
     void this.logPurchase({
       discordId: interaction.user.id,
       orderId: result.order_id,
@@ -900,11 +948,8 @@ export class StoreBot {
       }
       case "add-balance": {
         const target = interaction.options.getUser("user", true);
-        const bgl = interaction.options.getInteger("bgl", true);
-        const dl = interaction.options.getInteger("dl", true);
-        const wl = interaction.options.getInteger("wl", true);
         const note = interaction.options.getString("note") ?? undefined;
-        const deltaLocks = bgl * 10_000 + dl * 100 + wl;
+        const deltaLocks = getLockAmount(interaction);
         if (deltaLocks <= 0) {
           throw new Error("Tambahkan minimal 1 bgl, dl, atau wl");
         }
@@ -933,6 +978,65 @@ export class StoreBot {
           creditedLocks: deltaLocks,
           note,
         }).catch((error) => console.error("Gagal menulis deposit log:", error));
+        refresh = true;
+        break;
+      }
+      case "remove-balance": {
+        const target = interaction.options.getUser("user", true);
+        const note = interaction.options.getString("note") ?? undefined;
+        const deltaLocks = getLockAmount(interaction);
+        if (deltaLocks <= 0) {
+          throw new Error("Kurangi minimal 1 bgl, dl, atau wl");
+        }
+        const rate = await this.store.getSetting<number>("dl_rate_idr_per_dl");
+        const deltaIdr = Math.round((deltaLocks / 100) * rate);
+        const user = await this.store.removeBalance({
+          discordId: target.id,
+          deltaLocks,
+          deltaIdr,
+          note,
+          actorDiscordId: interaction.user.id,
+        });
+        response = [
+          `Saldo untuk **${target.tag}** berhasil dikurangi.`,
+          `Dikurangi: **${formatLockUnits(deltaLocks)}**`,
+          `Saldo sekarang: **${formatLockUnits(user.balance_locks)}**`,
+          `Perkiraan nilai rupiah: **${formatIdr(deltaIdr)}**`,
+          note ? `Catatan: ${note}` : null,
+        ]
+          .filter(Boolean)
+          .join("\n");
+        refresh = true;
+        break;
+      }
+      case "set-balance": {
+        const target = interaction.options.getUser("user", true);
+        const note = interaction.options.getString("note") ?? undefined;
+        const balanceLocks = getLockAmount(interaction);
+        const current = await this.store.getUser(target.id);
+        const previousLocks = current?.balance_locks ?? 0;
+        const deltaLocks = balanceLocks - previousLocks;
+        const rate = await this.store.getSetting<number>("dl_rate_idr_per_dl");
+        const deltaIdr = Math.round((Math.abs(deltaLocks) / 100) * rate);
+        const user = await this.store.setBalance({
+          discordId: target.id,
+          balanceLocks,
+          deltaIdr,
+          note,
+          actorDiscordId: interaction.user.id,
+        });
+        response = [
+          `Saldo untuk **${target.tag}** berhasil diset.`,
+          `Saldo sebelumnya: **${formatLockUnits(previousLocks)}**`,
+          `Saldo sekarang: **${formatLockUnits(user.balance_locks)}**`,
+          `Perubahan: **${formatLockUnits(Math.abs(deltaLocks))}** ${
+            deltaLocks >= 0 ? "ditambah" : "dikurangi"
+          }`,
+          `Perkiraan nilai perubahan: **${formatIdr(deltaIdr)}**`,
+          note ? `Catatan: ${note}` : null,
+        ]
+          .filter(Boolean)
+          .join("\n");
         refresh = true;
         break;
       }

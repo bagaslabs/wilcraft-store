@@ -268,6 +268,113 @@ export class StoreRepository {
     return data as UserAccount;
   }
 
+  async removeBalance(input: {
+    discordId: string;
+    deltaLocks: number;
+    deltaIdr: number;
+    note?: string;
+    actorDiscordId: string;
+  }): Promise<UserAccount> {
+    await this.ensureUser(input.discordId);
+    const current = await this.getUser(input.discordId);
+    if (!current) {
+      throw new Error("User tidak ditemukan");
+    }
+    if (input.deltaLocks <= 0) {
+      throw new Error("Kurangi minimal 1 bgl, dl, atau wl");
+    }
+    if (current.balance_locks < input.deltaLocks) {
+      throw new Error("Saldo user tidak mencukupi untuk dikurangi");
+    }
+
+    const updatedBalance = current.balance_locks - input.deltaLocks;
+    const { data, error } = await this.database
+      .from("users")
+      .update({
+        balance_locks: updatedBalance,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("discord_id", input.discordId)
+      .select("discord_id,grow_id,balance_locks,total_deposit_idr")
+      .single();
+    throwIfError(error);
+
+    const { error: transactionError } = await this.database.from("transactions").insert({
+      user_id: input.discordId,
+      type: "purchase",
+      amount_idr: -input.deltaIdr,
+      fee_idr: 0,
+      gross_amount_idr: -input.deltaIdr,
+      amount_locks: -input.deltaLocks,
+      status: "settlement",
+      midtrans_order_id: `MANUAL-REMOVE-${input.discordId}-${Date.now()}-${randomUUID()}`,
+      raw_payload: {
+        source: "manual_remove_balance",
+        note: input.note ?? "",
+        actor_discord_id: input.actorDiscordId,
+        amount_locks: -input.deltaLocks,
+        amount_idr: -input.deltaIdr,
+        previous_balance_locks: current.balance_locks,
+        new_balance_locks: updatedBalance,
+      },
+    });
+    throwIfError(transactionError);
+
+    return data as UserAccount;
+  }
+
+  async setBalance(input: {
+    discordId: string;
+    balanceLocks: number;
+    deltaIdr: number;
+    note?: string;
+    actorDiscordId: string;
+  }): Promise<UserAccount> {
+    await this.ensureUser(input.discordId);
+    const current = await this.getUser(input.discordId);
+    if (!current) {
+      throw new Error("User tidak ditemukan");
+    }
+    if (input.balanceLocks < 0) {
+      throw new Error("Saldo tidak boleh negatif");
+    }
+
+    const deltaLocks = input.balanceLocks - current.balance_locks;
+    const { data, error } = await this.database
+      .from("users")
+      .update({
+        balance_locks: input.balanceLocks,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("discord_id", input.discordId)
+      .select("discord_id,grow_id,balance_locks,total_deposit_idr")
+      .single();
+    throwIfError(error);
+
+    const { error: transactionError } = await this.database.from("transactions").insert({
+      user_id: input.discordId,
+      type: deltaLocks >= 0 ? "topup" : "purchase",
+      amount_idr: deltaLocks >= 0 ? input.deltaIdr : -input.deltaIdr,
+      fee_idr: 0,
+      gross_amount_idr: deltaLocks >= 0 ? input.deltaIdr : -input.deltaIdr,
+      amount_locks: deltaLocks,
+      status: "settlement",
+      midtrans_order_id: `MANUAL-SET-${input.discordId}-${Date.now()}-${randomUUID()}`,
+      raw_payload: {
+        source: "manual_set_balance",
+        note: input.note ?? "",
+        actor_discord_id: input.actorDiscordId,
+        previous_balance_locks: current.balance_locks,
+        new_balance_locks: input.balanceLocks,
+        delta_locks: deltaLocks,
+        delta_idr: deltaLocks >= 0 ? input.deltaIdr : -input.deltaIdr,
+      },
+    });
+    throwIfError(transactionError);
+
+    return data as UserAccount;
+  }
+
   async getStoreSettings(): Promise<StoreSettings> {
     const [dlRate, depositWorld] = await Promise.all([
       this.getSetting<number>("dl_rate_idr_per_dl"),

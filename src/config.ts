@@ -11,6 +11,7 @@ export interface AppConfig {
     buyLogChannelId?: string;
     depositLogChannelId?: string;
     adminRoleIds: string[];
+    purchaseRoleIds: string[];
   };
   supabase: {
     url: string;
@@ -61,6 +62,15 @@ function nonNegativeNumber(
   return parsed;
 }
 
+function stringList(value: string | undefined): string[] {
+  return (
+    value
+      ?.split(",")
+      .map((item) => item.trim())
+      .filter(Boolean) ?? []
+  );
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const minimumIdr = positiveInteger(
     env.MIN_TOPUP_IDR,
@@ -89,10 +99,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       adminChannelId: env.ADMIN_CHANNEL_ID?.trim() || undefined,
       buyLogChannelId: env.BUY_LOG_CHANNEL_ID?.trim() || undefined,
       depositLogChannelId: env.DEPOSIT_LOG_CHANNEL_ID?.trim() || undefined,
-      adminRoleIds:
-        env.ADMIN_ROLE_IDS?.split(",")
-          .map((roleId) => roleId.trim())
-          .filter(Boolean) ?? [],
+      adminRoleIds: stringList(env.ADMIN_ROLE_IDS),
+      purchaseRoleIds: stringList(
+        env.PURCHASE_ROLE_IDS ?? env.PURCHASE_ROLE_ID,
+      ),
     },
     supabase: {
       url: required(env, "SUPABASE_URL"),
