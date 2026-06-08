@@ -1,5 +1,7 @@
 create extension if not exists pgcrypto;
 
+-- ── Tables ──────────────────────────────────────────────
+
 create table if not exists public.users (
   discord_id text primary key,
   grow_id text,
@@ -32,8 +34,40 @@ create table if not exists public.orders (
   quantity integer not null check (quantity > 0),
   total_price_locks bigint not null check (total_price_locks >= 0),
   delivered_items text[] not null,
+  order_number bigint not null,
   created_at timestamptz not null default now()
 );
+
+create sequence if not exists public.orders_order_number_seq;
+
+alter table public.orders
+  add column if not exists order_number bigint;
+
+alter table public.orders
+  alter column order_number set default nextval('public.orders_order_number_seq'::regclass);
+
+alter sequence public.orders_order_number_seq
+  owned by public.orders.order_number;
+
+do $$
+declare
+  v_max_order_number bigint;
+begin
+  select coalesce(max(order_number), 0)
+  into v_max_order_number
+  from public.orders;
+
+  if v_max_order_number > 0 then
+    perform setval('public.orders_order_number_seq', v_max_order_number, true);
+  end if;
+end;
+$$;
+
+alter table public.orders
+  alter column order_number set not null;
+
+create unique index if not exists orders_order_number_idx
+  on public.orders (order_number);
 
 create table if not exists public.stock_items (
   id uuid primary key default gen_random_uuid(),
@@ -77,6 +111,8 @@ create table if not exists public.settings (
   updated_at timestamptz not null default now()
 );
 
+-- ── Seed data ───────────────────────────────────────────
+
 insert into public.settings (key, value)
 values
   ('qris_rate_idr_per_dl', '5000'::jsonb),
@@ -86,6 +122,8 @@ values
     '{"world":"OVERSTORE","owner":"CHANGE_ME","bot_name":"CHANGE_ME","note":"Jangan donasi jika bot yang berada di world bukan bot resmi toko."}'::jsonb
   )
 on conflict (key) do nothing;
+
+-- ── Live products view ──────────────────────────────────
 
 create or replace view public.live_products
 with (security_invoker = true)
@@ -104,15 +142,15 @@ from public.products p
 left join public.stock_items s on s.product_id = p.id
 group by p.id;
 
-drop function if exists public.purchase_product(text, text, integer);
+-- ── Functions ───────────────────────────────────────────
 
-create function public.purchase_product(
+create or replace function public.purchase_product(
   p_discord_id text,
   p_product_code text,
   p_quantity integer
 )
 returns table (
-  order_id uuid,
+  order_id text,
   product_name text,
   product_code text,
   unit_price_locks bigint,
@@ -131,7 +169,8 @@ declare
   v_product public.products%rowtype;
   v_stock_ids uuid[];
   v_stock_contents text[];
-  v_order_id uuid;
+  v_order_uuid uuid;
+  v_order_number bigint;
   v_order_created_at timestamptz;
   v_total bigint;
   v_unit_price bigint;
@@ -164,6 +203,7 @@ begin
 
   v_total := v_product.price_locks * p_quantity;
   v_unit_price := v_product.price_locks;
+
   if v_user.balance_locks < v_total then
     raise exception 'Saldo tidak mencukupi';
   end if;
@@ -200,14 +240,15 @@ begin
     v_total,
     v_stock_contents
   )
-  returning o.id, o.created_at into v_order_id, v_order_created_at;
+  returning o.id, o.order_number, o.created_at
+  into v_order_uuid, v_order_number, v_order_created_at;
 
   update public.stock_items as si
   set
     status = 'sold',
     sold_to = p_discord_id,
     sold_at = now(),
-    order_id = v_order_id
+    order_id = v_order_uuid
   where si.id = any(v_stock_ids);
 
   update public.users as u
@@ -235,12 +276,15 @@ begin
     'purchase',
     -v_total,
     'settlement',
-    jsonb_build_object('order_id', v_order_id)
+    jsonb_build_object(
+      'order_id', v_order_uuid,
+      'order_number', v_order_number
+    )
   );
 
   return query
   select
-    v_order_id,
+    v_order_number::text,
     v_product.name,
     v_product.code,
     v_unit_price,
@@ -276,7 +320,7 @@ declare
   v_transaction public.transactions%rowtype;
   v_balance bigint;
 begin
-  select *
+  select t.*
   into v_transaction
   from public.transactions as t
   where t.midtrans_order_id = p_order_id
@@ -348,12 +392,16 @@ begin
 end;
 $$;
 
+-- ── Row-level security ──────────────────────────────────
+
 alter table public.users enable row level security;
 alter table public.products enable row level security;
 alter table public.stock_items enable row level security;
 alter table public.orders enable row level security;
 alter table public.transactions enable row level security;
 alter table public.settings enable row level security;
+
+-- ── Permissions ─────────────────────────────────────────
 
 revoke all on function public.purchase_product(text, text, integer)
   from public, anon, authenticated;
